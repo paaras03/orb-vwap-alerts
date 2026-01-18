@@ -6,6 +6,15 @@ import pytz
 from datetime import datetime, timedelta, time as dtime
 from kiteconnect import KiteConnect
 
+requests.post(
+    f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
+    data={
+        "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+        "text": "TEST MESSAGE: Railway + Telegram working"
+    },
+    timeout=5
+)
+
 # ================= ENV =================
 API_KEY = os.environ["KITE_API_KEY"]
 ACCESS_TOKEN = os.environ["KITE_ACCESS_TOKEN"]
