@@ -65,20 +65,19 @@ TOKENS = {
 }
 
 sent_today = set()
+open_trades = {}  # sym -> {entry, sl, target}
 market_start_sent = False
 exit_alert_sent = False
-last_heartbeat_hour = None  # <-- heartbeat state
+last_heartbeat_hour = None
 
 # ================= MAIN LOOP =================
 while True:
     try:
         t = now()
 
-        # -------- HEARTBEAT @ HH:00 --------
+        # -------- HEARTBEAT --------
         if t.minute == 0 and last_heartbeat_hour != t.hour:
-            send_telegram(
-                f"💓 HEARTBEAT OK\nTime: {t.strftime('%H:%M:%S')}"
-            )
+            send_telegram(f"💓 HEARTBEAT OK\nTime: {t.strftime('%H:%M:%S')}")
             last_heartbeat_hour = t.hour
 
         # -------- BEFORE MARKET --------
@@ -115,10 +114,6 @@ while True:
             continue
 
         for sym, token in TOKENS.items():
-            key = (sym, t.date())
-            if key in sent_today:
-                continue
-
             candles = kite.historical_data(
                 token,
                 t - timedelta(days=3),
@@ -139,7 +134,40 @@ while True:
 
             day["time"] = day["date"].dt.time
 
-            # -------- ORB --------
+            # last completed candle
+            last = day.iloc[-2]
+
+            # ================= SELL LOGIC =================
+            if sym in open_trades:
+                trade = open_trades[sym]
+
+                if last["close"] >= trade["target"]:
+                    send_telegram(
+                        f"{sym} SELL ALERT 🎯\n"
+                        f"Reason: Target Hit\n"
+                        f"Time: {last['date'].strftime('%H:%M')}\n"
+                        f"Close: {last['close']:.2f}\n"
+                        f"Target: {trade['target']:.2f}"
+                    )
+                    del open_trades[sym]
+                    continue
+
+                if last["close"] <= trade["sl"]:
+                    send_telegram(
+                        f"{sym} SELL ALERT 🛑\n"
+                        f"Reason: Stop Loss Hit\n"
+                        f"Time: {last['date'].strftime('%H:%M')}\n"
+                        f"Close: {last['close']:.2f}\n"
+                        f"SL: {trade['sl']:.2f}"
+                    )
+                    del open_trades[sym]
+                    continue
+
+            # ================= BUY LOGIC =================
+            key = (sym, t.date())
+            if key in sent_today:
+                continue
+
             orb = day[(day["time"] >= ORB_START) & (day["time"] < ORB_END)]
             if orb.empty:
                 continue
@@ -150,16 +178,12 @@ while True:
             if (orb_high - orb_low) / orb_low * 100 < MIN_ORB_PCT:
                 continue
 
-            # -------- VWAP --------
             tp = (day["high"] + day["low"] + day["close"]) / 3
             day["vwap"] = (tp * day["volume"]).cumsum() / day["volume"].cumsum()
-
-            last = day.iloc[-2]
 
             if not (ORB_END < last["time"] <= NO_ENTRY_AFTER):
                 continue
 
-            # -------- ENTRY --------
             if last["close"] > orb_high and last["close"] > last["vwap"]:
                 sl = max(orb_low, last["vwap"])
                 risk = last["close"] - sl
@@ -172,6 +196,12 @@ while True:
                     f"SL: {sl:.2f}\n"
                     f"Target (2R): {target:.2f}"
                 )
+
+                open_trades[sym] = {
+                    "entry": last["close"],
+                    "sl": sl,
+                    "target": target
+                }
 
                 sent_today.add(key)
 
